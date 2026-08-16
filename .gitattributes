@@ -8,6 +8,7 @@
 # breaks every .sh/.bats file the moment it's actually run.
 *.sh text eol=lf
 *.bats text eol=lf
+*.bash text eol=lf
 
 # Same reasoning for Python: a CRLF-corrupted shebang line breaks direct
 # execution, and mixed line endings inside a file are a needless diff-noise
