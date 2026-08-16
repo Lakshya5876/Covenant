@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.claude/session_spend.tmp
+
+# Generated-by-install artifacts — never meant to be committed in the CovenantWin
+# framework repo itself. covenantwin.py now refuses to install into this repo
+# (see repo_root() self-guard), but these are ignored defensively too.
+/.githooks/
+/.claude/hooks/
+/.claude/covenant_state.json
+/.claude/covenant_integrity.sha256

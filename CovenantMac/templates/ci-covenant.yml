@@ -1,0 +1,80 @@
+# CI parity backstop — deployed by install.sh to .github/workflows/covenant.yml
+# Runs the committed covenant.sh in CI mode so a hook-stripped clone (a developer
+# who deleted .githooks or pushed with --no-verify) still cannot merge unverified
+# code. CI is the authoritative backstop to the local pre-commit/pre-push hooks.
+name: governance-covenant
+
+on:
+  pull_request:
+    branches: [main, master, develop, "release/**", production]
+  push:
+    branches: [main, master, develop, "release/**", production]
+
+permissions:
+  contents: read
+
+jobs:
+  covenant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — covenant needs diff range)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python (covenant.sh json helpers)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify governance files are present, unmodified, and integrity-pinned
+        run: |
+          set -euo pipefail
+          test -f .githooks/verify_governance_integrity.sh || { echo "::error::.githooks/verify_governance_integrity.sh missing — governance stripped"; exit 1; }
+          chmod +x .githooks/verify_governance_integrity.sh
+          bash .githooks/verify_governance_integrity.sh
+
+      - name: Resolve base SHA for diff scope
+        # A CI checkout never has anything staged, so covenant.sh's normal
+        # "git diff --cached" cold-start path is always empty here regardless
+        # of what actually changed — without this, the covenant silently passed
+        # with zero checks run on every first-time/cold-start CI invocation.
+        # PRs diff against the PR's target branch tip; direct pushes diff
+        # against the previous HEAD. A brand-new branch's first push reports
+        # `before` as all-zeros, which doesn't resolve to a real commit —
+        # covenant.sh detects that and falls back to a full-tree scan rather than
+        # treating it as "nothing changed".
+        id: base_sha
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install target-repo dependencies (best-effort, language-agnostic)
+        # This framework is language-agnostic (Python, Node, or both) — it
+        # installs whatever dependency manifests the TARGET repo itself
+        # already declares, not a new dependency of the framework. No -e:
+        # a repo that only has one language's manifest must not fail this
+        # step just because the other language's tool isn't relevant here.
+        run: |
+          set -uo pipefail
+          [ -f requirements.txt ] && pip install -r requirements.txt
+          [ -f pyproject.toml ] && pip install -e . || true
+          [ -f package-lock.json ] && npm ci
+          [ -f package.json ] && [ ! -f package-lock.json ] && npm install
+          true
+
+      - name: Run governance covenant (mechanical — tests forced on in CI)
+        env:
+          COVENANT_TRIGGER: ci
+          RUN_TESTS: "true"
+          CI_BASE_SHA: ${{ steps.base_sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          chmod +x .githooks/covenant.sh
+          # CI runs the covenant against the checked-out tree. Tests, coverage,
+          # lint ratchet, complexity, and secrets scan all execute mechanically.
+          bash .githooks/covenant.sh

@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Claude Code's own local/personal settings (permissions granted during a
+# specific dev session) — never product content, never meant to be committed.
+.claude/settings.local.json

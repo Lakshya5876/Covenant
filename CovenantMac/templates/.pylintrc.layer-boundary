@@ -1,0 +1,47 @@
+# Layer-boundary lint supplement — Python services/application layer.
+#
+# Supplements covenant.sh's STEP 6.5 grep-based layer boundary scan with pylint's
+# native `deprecated-module` check (built-in, AST-based — not a custom
+# plugin). Verified empirically against pylint 4.0.6/astroid 4.0.4:
+#
+#   from fastapi import HTTPException          -> flagged (deprecated-module)
+#   from fastapi import HTTPException as Err   -> flagged (aliasing doesn't hide it)
+#   import fastapi as fa                       -> flagged
+#   from fastapi.responses import JSONResponse -> flagged (submodule of a banned package)
+#   from django.http import HttpResponse       -> flagged (submodule-only ban)
+#   from django.db import models               -> NOT flagged (django itself isn't banned,
+#                                                  only django.http — confirms prefix
+#                                                  matching bans the listed module path,
+#                                                  not its whole top-level package)
+#
+# WHAT THIS DOES NOT CATCH (same limitation as the grep it supplements, not
+# a regression — see docs/SECURITY_POSTURE.md section 7 and the pinned test
+# at tests/covenant/layer_boundary_block.bats:63):
+#
+#   from myapp.http_shim import raise_http_error
+#
+# where http_shim.py itself imports fastapi. pylint's deprecated-module check
+# only sees the module path written in the import statement being scanned —
+# it does not resolve where an imported NAME is actually defined. Closing
+# that requires import-graph/AST resolution across files (the MCP graph
+# server's job), not a linter config change. Don't let this file's presence
+# imply that gap is closed — it isn't.
+#
+# Usage: run scoped to services/application-layer files only, e.g.
+#   pylint --rcfile=.pylintrc.layer-boundary app/services/**/*.py
+# Wire this into the target repo's LINT_CMD alongside its normal lint run —
+# it disables every other pylint check so it can be invoked as a narrow,
+# additive pass without fighting the project's main pylint config.
+
+[MASTER]
+persistent=no
+
+[MESSAGES CONTROL]
+disable=all
+enable=deprecated-module
+
+[IMPORTS]
+# Extend this list to match whatever HTTP frameworks the target stack uses.
+# Ban specific submodules (django.http) rather than whole packages (django)
+# when only part of a package is a layer violation.
+deprecated-modules=fastapi,flask,django.http,starlette

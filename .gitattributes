@@ -1,0 +1,35 @@
+# Scripts that get executed by a POSIX shell (bash, or a bash-compatible
+# interpreter like Git for Windows' bundled sh) must always check out with LF
+# line endings, regardless of the cloning machine's core.autocrlf setting —
+# a CRLF-terminated shebang or `set -euo pipefail` line fails to parse
+# ("invalid option name"), breaking the script outright. Windows' commonly
+# recommended `core.autocrlf=true` converts LF to CRLF on checkout by
+# default; without this file, a fresh clone on such a machine silently
+# breaks every .sh/.bats file the moment it's actually run.
+*.sh text eol=lf
+*.bats text eol=lf
+
+# Same reasoning for Python: a CRLF-corrupted shebang line breaks direct
+# execution, and mixed line endings inside a file are a needless diff-noise
+# and tooling risk.
+*.py text eol=lf
+
+# Git hook files (pre-commit, pre-push) have no extension but are POSIX
+# shell scripts executed directly by git — same requirement.
+CovenantMac/templates/pre-commit text eol=lf
+CovenantMac/templates/pre-push text eol=lf
+
+# Everything else: let git normalize line endings for text diffing, but
+# don't force a specific ending — these aren't executed as scripts.
+*.md text
+*.json text
+*.yml text
+*.yaml text
+*.cjs text
+*.pylintrc text
+
+# PowerShell scripts are meant to run on Windows; leave their line endings
+# alone rather than forcing LF (Windows PowerShell handles both fine, and
+# forcing LF here has no correctness benefit the way it does for POSIX
+# shebangs).
+*.ps1 text

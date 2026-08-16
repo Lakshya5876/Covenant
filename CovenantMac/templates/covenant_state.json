@@ -1,0 +1,83 @@
+{
+  "_comment": "Claude Code covenant ledger — managed by covenant.sh and CLAUDE.md. Do NOT hand-edit.",
+
+  "framework_version": "1.0.0",
+  "framework_last_upgrade": null,
+  "constitution_source_version": null,
+  "_constitution_source_version_comment": "Set by the init prompt (Phase B) when CLAUDE.md is generated — the framework version the dev guide shipped with at that time. install.sh never writes CLAUDE.md, so it cannot set this itself; --upgrade reads it to know whether a dev-guide content change needs human reconciliation (see /reconcile-governance).",
+
+  "last_pass_sha": {},
+  "last_pass_timestamp": null,
+
+  "thresholds": {
+    "coverage_pct": 80,
+    "complexity_max": 10,
+    "command_timeout_sec": 30,
+    "git_cache_ttl_sec": 60,
+    "checkpoint_pressure": { "files": 8, "commits": 1, "session_hours": 3 }
+  },
+
+  "core_files": [],
+  "_core_files_comment": "Glob patterns (fnmatch) for architecture-critical files. Any change touching a match forces TIER-3: full test suite + mandatory test run even at pre-commit. Edited only via human PR.",
+
+  "token": {
+    "_comment": "Daily budget computed from ~/.claude/org_policy.json: WEEKLY_LIMIT × DAILY_BUDGET_PCT ÷ 100. Set token_budget here only for a repo-level override (must be ≤ org ceiling). null = use org policy.",
+    "token_budget": null,
+    "token_spent_today": 0,
+    "token_last_reset": null,
+    "token_audit_log": []
+  },
+
+  "mcp_graph": {
+    "config_path": ".mcp.json",
+    "last_build_timestamp": null,
+    "node_count": 0,
+    "restart_count": 0,
+    "restart_last_ts": null,
+    "_restart_comment": "Written by _ensure_graph_alive (covenant.sh) when a build's PID file points to a dead process without its own cleanup having run — i.e. a crash, not a normal exit. Capped at 3 restarts per rolling 24h window; count resets on the next successful freshness rebuild.",
+    "included_domains": [
+      "application_code",
+      "sql_migrations",
+      "orm_models",
+      "infrastructure",
+      "ci_cd",
+      "proxy_config",
+      "env_contracts"
+    ]
+  },
+
+  "branch_strategy": {
+    "feature": {
+      "strategy_name": "BROAD",
+      "max_hops": null,
+      "tools_permitted": ["get_architecture_overview_tool", "semantic_search_nodes_tool", "get_impact_radius_tool", "query_graph_tool", "get_review_context_tool"],
+      "architecture_overview_required": true
+    },
+    "bugfix": {
+      "strategy_name": "NARROW",
+      "max_hops": 2,
+      "tools_permitted": ["get_impact_radius_tool", "query_graph_tool"],
+      "architecture_overview_required": false
+    },
+    "hotfix": {
+      "strategy_name": "ULTRA-NARROW",
+      "max_hops": 1,
+      "tools_permitted": ["get_impact_radius_tool"],
+      "architecture_overview_required": false
+    },
+    "release": {
+      "strategy_name": "DIFF-ONLY",
+      "max_hops": null,
+      "tools_permitted": ["get_review_context_tool"],
+      "architecture_overview_required": false,
+      "code_writes_permitted": false
+    }
+  },
+
+  "execution_mode_log": [],
+
+  "session_state_path": ".claude/session_state.json",
+
+  "_receipts_comment": "Keyed by COMMIT_TREE_FP (git tree hash of the committed index). Written by pre-commit after all checks pass; verified by pre-push. Never keyed by the working-tree fingerprint.",
+  "receipts": {}
+}

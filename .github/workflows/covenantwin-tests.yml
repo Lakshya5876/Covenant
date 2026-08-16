@@ -1,0 +1,42 @@
+name: covenantwin-tests
+
+on:
+  push:
+    branches: [main]
+    paths: ['CovenantWin/**', 'v1_release/**', '.github/workflows/covenantwin-tests.yml']
+  pull_request:
+    branches: [main]
+    paths: ['CovenantWin/**', 'v1_release/**', '.github/workflows/covenantwin-tests.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The engine is pure Python and the hook shims are POSIX shell reused
+    # verbatim from CovenantMac (Git for Windows dispatches hooks through its own
+    # bundled sh) — so this genuinely exercises the same code path on all
+    # three OSes, not just "does Python parse." That's the whole point: prove
+    # identical behavior cross-platform, not just claim it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity (needed by the test fixtures' real commits)
+        run: |
+          git config --global user.email "covenantwin-ci@example.test"
+          git config --global user.name "CovenantWin CI"
+
+      - name: Run CovenantWin test suite
+        working-directory: CovenantWin
+        run: python -m pytest tests/test_covenantwin.py -v

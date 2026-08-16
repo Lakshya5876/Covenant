@@ -1,0 +1,53 @@
+# Trust-root governance files — require code owner approval before merge to main
+# Without this, a single PR can edit covenant.sh/covenantwin.py + regenerate its own integrity pin,
+# weakening the covenant. These must be reviewed by a human every time they change.
+#
+# GitHub only honors a CODEOWNERS file at the true repo root (or its .github/) — this file
+# lives there for that reason, covering both platform subdirectories with root-relative paths.
+#
+# Two sets of paths are covered below:
+#  1. This repo's OWN trust root (CovenantMac/templates/, CovenantMac/install.sh, CovenantWin/src/, the
+#     shared v1_release/, etc.) — the files that actually exist here and that a malicious or
+#     careless PR could weaken.
+#  2. The paths each platform's installer writes into a governed TARGET repo (.githooks/,
+#     .claude/*, etc.) — these don't exist in this repo; listed as guidance mirrored into
+#     every installed repo's own CODEOWNERS scaffold.
+
+# ── This repo's real trust root ──────────────────────────────────────────────
+v1_release/                         @Lakshya5876
+CovenantMac/templates/                  @Lakshya5876
+CovenantMac/install.sh                  @Lakshya5876
+CovenantMac/uninstall.sh                @Lakshya5876
+CovenantMac/.github/workflows/          @Lakshya5876
+CovenantWin/src/                        @Lakshya5876
+CovenantWin/install.ps1                 @Lakshya5876
+CovenantWin/uninstall.ps1               @Lakshya5876
+.github/workflows/                  @Lakshya5876
+
+# ── Paths that only exist in a governed TARGET repo (reference only) ────────
+# Git hooks — the enforcement layer
+.githooks/                          @your-org/platform-team
+
+# Bash/PowerShell guard hook — prevents agent from disarming itself
+.claude/hooks/                      @your-org/platform-team
+
+# Covenant integrity manifest — pins every governance file's hash
+.claude/covenant_integrity.sha256       @your-org/platform-team
+
+# CI governance workflow — authoritative backstop if local hooks are stripped
+.github/workflows/covenant.yml          @your-org/platform-team
+
+# Covenant state + ledger — token budgets, receipts, audit log
+.claude/covenant_state.json             @your-org/platform-team
+
+# Debt ratchet — technical debt baseline
+.claude/baseline.json               @your-org/platform-team
+
+# Repo constitution — rules Claude Code must follow
+CLAUDE.md                           @your-org/platform-team
+
+# Claude Code permissions — what the agent is allowed to do
+.claude/settings.json               @your-org/platform-team
+
+# MCP server configuration — which external tools Claude Code connects to
+.mcp.json                           @your-org/platform-team

@@ -1,0 +1,10 @@
+# Editor/OS cruft at the monorepo root. Each platform subdirectory (CovenantMac/,
+# CovenantWin/) has its own .gitignore for its own generated/ephemeral artifacts —
+# this file only covers things that could land at the repo root.
+.DS_Store
+Thumbs.db
+*.swp
+
+# This is a Claude Code session's own local settings, not product content —
+# never meant to be committed to the Covenant repo itself.
+/.claude/
