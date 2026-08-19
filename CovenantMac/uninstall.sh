@@ -246,6 +246,25 @@ if [ -f ".gitignore" ]; then
     done
 fi
 
+# .gitattributes entries added by install.sh (pins the 7 governance files to
+# LF so autocrlf can't silently drift the integrity manifest — see
+# _write_gitattributes)
+GITATTRIBUTES_ENTRIES=()
+FRAMEWORK_GITATTRIBUTES_ENTRIES=(
+    ".githooks/covenant.sh text eol=lf"
+    ".githooks/verify_governance_integrity.sh text eol=lf"
+    ".githooks/pre-commit text eol=lf"
+    ".githooks/pre-push text eol=lf"
+    ".claude/hooks/pre_bash_trust_root_guard.sh text eol=lf"
+    ".claude/hooks/graph_freshness_check.py text eol=lf"
+    ".claude/checkpoint_tool.py text eol=lf"
+)
+if [ -f ".gitattributes" ]; then
+    for entry in "${FRAMEWORK_GITATTRIBUTES_ENTRIES[@]}"; do
+        grep -qF "$entry" .gitattributes 2>/dev/null && GITATTRIBUTES_ENTRIES+=("$entry")
+    done
+fi
+
 # ── Print manifest ─────────────────────────────────────────────────────────────
 echo "Everything below will be permanently removed from ${REPO_ROOT}:"
 echo ""
@@ -265,6 +284,10 @@ fi
 if [ ${#GITIGNORE_ENTRIES[@]} -gt 0 ]; then
     echo "  .gitignore entries:"
     for e in "${GITIGNORE_ENTRIES[@]}"; do echo "    • $e"; done
+fi
+if [ ${#GITATTRIBUTES_ENTRIES[@]} -gt 0 ]; then
+    echo "  .gitattributes entries:"
+    for e in "${GITATTRIBUTES_ENTRIES[@]}"; do echo "    • $e"; done
 fi
 
 echo ""
@@ -351,6 +374,19 @@ open('.gitignore', 'w').writelines(l for l in lines if l.rstrip('\n') != entry)
 " "$entry" 2>/dev/null || true
     done
     _success "Removed framework entries from .gitignore"
+fi
+
+# ── .gitattributes cleanup ─────────────────────────────────────────────────────
+if [ ${#GITATTRIBUTES_ENTRIES[@]} -gt 0 ] && [ -f ".gitattributes" ]; then
+    for entry in "${FRAMEWORK_GITATTRIBUTES_ENTRIES[@]}"; do
+        python3 -c "
+import sys
+entry = sys.argv[1]
+lines = open('.gitattributes').readlines()
+open('.gitattributes', 'w').writelines(l for l in lines if l.rstrip('\n') != entry)
+" "$entry" 2>/dev/null || true
+    done
+    _success "Removed framework entries from .gitattributes"
 fi
 
 # ── Global resources ──────────────────────────────────────────────────────────

@@ -62,6 +62,26 @@ if (Test-Path -LiteralPath $gitignorePath) {
   }
 }
 
+# .gitattributes entries added by install.ps1 (pins the 4 governance files to
+# LF so a common Windows git config, core.autocrlf=true, can't silently
+# rewrite their bytes on checkout and break the integrity manifest)
+$gitattributesPath = Join-Path $repo '.gitattributes'
+if (Test-Path -LiteralPath $gitattributesPath) {
+  $gaEntries = @(
+    '.githooks/covenantwin.py text eol=lf',
+    '.githooks/pre-commit text eol=lf',
+    '.githooks/pre-push text eol=lf',
+    '.claude/hooks/pre_bash_trust_root_guard.sh text eol=lf'
+  )
+  $gaLines = Get-Content -LiteralPath $gitattributesPath
+  $gaKept = $gaLines | Where-Object { $gaEntries -notcontains $_.Trim() }
+  if (($gaKept -join "`n") -ne ($gaLines -join "`n")) {
+    if ($PSCmdlet.ShouldProcess($gitattributesPath, 'Remove CovenantWin .gitattributes entries')) {
+      Set-Content -LiteralPath $gitattributesPath -Value $gaKept -Encoding utf8
+    }
+  }
+}
+
 # .github/CODEOWNERS is intentionally NEVER removed here - same as CovenantMac's
 # uninstall.sh: a human may have already replaced the placeholder team with
 # real content, and this uninstaller removes governance tooling, not repo

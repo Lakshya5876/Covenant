@@ -117,6 +117,39 @@ class CovenantWinIntegrationTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn('integrity mismatch', p.stderr)
 
+    def test_manifest_drift_blocks_at_precommit_not_just_later_at_push(self):
+        # Regression: check_integrity() previously only ran at
+        # trigger in ('pre-push', 'ci') — editing a governance file without
+        # regenerating covenant_integrity.sha256 passed pre-commit cleanly
+        # and only surfaced one commit later at push time, disconnected from
+        # the edit that caused it. Now runs on every trigger, so the drift
+        # is caught in the SAME commit that introduces it.
+        guard = self.repo/'.claude/hooks/pre_bash_trust_root_guard.sh'
+        guard.write_text(guard.read_text() + '\n# edited without re-pinning the manifest\n')
+        call(['git', 'add', str(guard)], self.repo)
+        p = call(['git', 'commit', '-m', 'edit a governance file, forget to regenerate the pin'], self.repo)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('integrity mismatch', p.stderr)
+
+    def test_gitattributes_written_on_install_covers_governance_set(self):
+        attrs = (self.repo/'.gitattributes').read_text(encoding='utf-8')
+        self.assertIn('.githooks/covenantwin.py text eol=lf', attrs)
+        self.assertIn('.githooks/pre-commit text eol=lf', attrs)
+        self.assertIn('.githooks/pre-push text eol=lf', attrs)
+        self.assertIn('.claude/hooks/pre_bash_trust_root_guard.sh text eol=lf', attrs)
+
+    def test_gitattributes_write_is_idempotent_and_preserves_existing_content(self):
+        attrs_path = self.repo/'.gitattributes'
+        before = attrs_path.read_text(encoding='utf-8')
+        attrs_path.write_text(before + '*.png binary\n', encoding='utf-8')
+        sys.path.insert(0, str(ENGINE.parent))
+        import importlib
+        covenantwin = importlib.import_module('covenantwin')
+        covenantwin._write_gitattributes(self.repo)
+        after = attrs_path.read_text(encoding='utf-8')
+        self.assertIn('*.png binary', after)
+        self.assertEqual(after.count('.githooks/covenantwin.py text eol=lf'), 1)
+
     def test_trust_root_settings_has_deny_list_and_bash_guard_hook(self):
         settings = json.loads((self.repo/'.claude/settings.json').read_text())
         deny = settings['permissions']['deny']
@@ -258,6 +291,17 @@ class CovenantWinIntegrationTests(unittest.TestCase):
         check = call([sys.executable, str(ENGINE), 'check-integrity', str(self.repo)], self.repo)
         self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_upgrade_backfills_gitattributes_for_a_pre_existing_install(self):
+        # Simulates an install from before .gitattributes existed as a
+        # feature: no such file in the repo. --upgrade must backfill it
+        # rather than leaving pre-existing installs permanently exposed to
+        # the autocrlf hash-drift bug.
+        (self.repo/'.gitattributes').unlink()
+        p = call([sys.executable, str(ENGINE), 'upgrade', str(self.repo)], self.repo)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        attrs = (self.repo/'.gitattributes').read_text(encoding='utf-8')
+        self.assertIn('.githooks/covenantwin.py text eol=lf', attrs)
+
     def test_upgrade_force_overwrites_ci_workflow_but_never_clobbers_codeowners(self):
         workflow = self.repo/'.github/workflows/covenant.yml'
         workflow.write_text('# stale, pre-upgrade content\n')
@@ -340,6 +384,41 @@ class CovenantWinIntegrationTests(unittest.TestCase):
         call(['git', 'add', 'NOTES.md'], self.repo)
         p = call(['git', 'commit', '-m', 'docs only'], self.repo)
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_inferred_test_command_avoids_fail_closed_and_actually_runs(self):
+        # Regression for the platform-parity gap: covenant.sh degrades to
+        # topology inference when TEST_CMD isn't set; covenantwin.py used to
+        # have no such fallback at all, so a repo with a real, detectable
+        # test stack (pytest.ini present) still permanently fail-closed until
+        # a human hand-edited commands.test — even though covenant.sh would
+        # have found and run pytest automatically. commands.test is left
+        # unset here on purpose: the whole point is that inference alone,
+        # with zero explicit config, is enough to both unblock the commit
+        # and actually execute a real test run (not just satisfy the gate).
+        (self.repo/'pytest.ini').write_text('[pytest]\n')
+        (self.repo/'test_sample.py').write_text('def test_ok():\n    assert True\n')
+        call(['git', 'add', '-A'], self.repo)
+        p = call(['git', 'commit', '-m', 'add a real pytest-detectable stack'], self.repo)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('inferred test command', p.stderr)
+        state = json.loads((self.repo/'.claude/covenant_state.json').read_text())
+        # The inferred command must never get silently persisted into
+        # committed config — same non-persistence covenant.sh's own
+        # TEST_RUNNERS follows (an inferred guess is not reviewed config).
+        self.assertIsNone(state['commands']['test'])
+
+    def test_inferred_test_command_actually_executes_at_push(self):
+        (self.repo/'pytest.ini').write_text('[pytest]\n')
+        (self.repo/'test_sample.py').write_text('def test_fails():\n    assert False\n')
+        call(['git', 'add', '-A'], self.repo)
+        commit = call(['git', 'commit', '-m', 'a failing test, no commands.test configured'], self.repo)
+        self.assertEqual(commit.returncode, 0, commit.stderr)
+        remote = Path(self.tmp.name) / 'remote2.git'
+        call(['git', 'init', '--bare', str(remote)], self.repo)
+        call(['git', 'config', 'remote.origin.url', str(remote)], self.repo)
+        p = call(['git', 'push', '-u', 'origin', 'feature/test'], self.repo)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn('tests failed', p.stderr)
 
     def test_tier3_brainstorm_block_applies_to_agent_with_five_plus_files_and_no_checkpoint(self):
         for i in range(5):

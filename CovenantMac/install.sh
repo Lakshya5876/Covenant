@@ -331,6 +331,37 @@ _write_integrity_manifest() {
     fi
 }
 
+_write_gitattributes() {
+    # Protects the 7 integrity-pinned governance files from Windows' commonly
+    # recommended core.autocrlf=true silently rewriting their bytes on
+    # checkout. The manifest hashes raw on-disk bytes (sha256sum/shasum); a
+    # normal `git checkout` on a machine with autocrlf enabled converts LF to
+    # CRLF with zero content change, which changes the hash and breaks
+    # verify_governance_integrity.sh — and for the bash-shebang files, also
+    # breaks the script outright ("set: pipefail: invalid option name").
+    # Found and fixed for this framework's own repo first; this propagates
+    # the same fix to every repo the framework installs into, which needed
+    # it independently — a target repo's .gitattributes is separate from
+    # this one's. Idempotent: only appends entries not already present, and
+    # called from both fresh install and --upgrade so existing installs get
+    # backfilled.
+    touch .gitattributes
+    GITATTRIBUTES_ENTRIES=(
+        ".githooks/covenant.sh text eol=lf"
+        ".githooks/verify_governance_integrity.sh text eol=lf"
+        ".githooks/pre-commit text eol=lf"
+        ".githooks/pre-push text eol=lf"
+        ".claude/hooks/pre_bash_trust_root_guard.sh text eol=lf"
+        ".claude/hooks/graph_freshness_check.py text eol=lf"
+        ".claude/checkpoint_tool.py text eol=lf"
+    )
+    for entry in "${GITATTRIBUTES_ENTRIES[@]}"; do
+        if ! grep -qF "$entry" .gitattributes 2>/dev/null; then
+            echo "$entry" >> .gitattributes
+        fi
+    done
+}
+
 _write_init_command() {
     # One-command init: extract the PROMPT START/END block from the init
     # package (the exact content a human would otherwise open the file and
@@ -685,6 +716,8 @@ except Exception:
     # regardless of whether basket detection succeeded.
     _write_integrity_manifest
     _success "Integrity manifest re-pinned (.claude/covenant_integrity.sha256)."
+    _write_gitattributes
+    _success "Governance files pinned to LF in .gitattributes (backfilled for existing installs)."
 
     # CI workflow is force-overwritten on upgrade (unlike fresh install which skips if exists)
     mkdir -p .github/workflows
@@ -734,7 +767,7 @@ PYEOF
     echo "reviewed like any other change to the enforcement boundary, not rubber-stamped."
     echo ""
     echo "Commit the upgrade to activate it for the whole team:"
-    echo "  git add .githooks/ .claude/covenant_integrity.sha256 .claude/settings.json .claude/hooks/ .claude/checkpoint_tool.py .claude/commands/ .github/workflows/covenant.yml .claude/covenant_state.json"
+    echo "  git add .githooks/ .claude/covenant_integrity.sha256 .claude/settings.json .claude/hooks/ .claude/checkpoint_tool.py .claude/commands/ .github/workflows/covenant.yml .claude/covenant_state.json .gitattributes"
     echo "  git commit -m 'chore: upgrade governance framework to ${FRAMEWORK_SEMVER}'"
     echo ""
 }
@@ -908,6 +941,8 @@ _success "Checkpoint memory installed (.claude/checkpoint_tool.py, /checkpoint-s
 # ── STEP 4c: Integrity manifest (must run after every governance script above exists) ──
 _write_integrity_manifest
 _success "Integrity manifest computed (.claude/covenant_integrity.sha256)"
+_write_gitattributes
+_success "Governance files pinned to LF in .gitattributes (protects the manifest from autocrlf drift)"
 
 # CI parity workflow — the authoritative backstop if local hooks are stripped.
 mkdir -p .github/workflows
@@ -1175,6 +1210,7 @@ echo "  ✓ Init package:   ${INIT_PKG_DST}"
 echo "  ✓ Covenant ledger:    .claude/covenant_state.json"
 echo "  ✓ Git hooks:      .githooks/ (pre-commit, pre-push, covenant.sh, verify_governance_integrity.sh)"
 echo "  ✓ Integrity pin:  .claude/covenant_integrity.sha256 (multi-file manifest — CI verifies all 7 governance scripts against this)"
+echo "  ✓ Line endings:   .gitattributes (pins the 7 governance files to LF — protects the manifest from autocrlf drift)"
 echo "  ✓ Trust-root deny: .claude/settings.json (permissions.deny + Bash guard hook — mechanical)"
 echo "  ✓ Init command:   .claude/commands/init-governance.md (run /init-governance next, instead of copy-pasting ${INIT_PKG_DST})"
 echo "  ✓ Checkpoint memory: .claude/checkpoint_tool.py + .claude/commands/checkpoint-search.md (mechanical capture + progressive-disclosure search)"

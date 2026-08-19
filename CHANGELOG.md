@@ -46,6 +46,33 @@ install-time experience, verified with 29 passing end-to-end tests:
   loop against the real installers on both platforms, not a simulation.
 - Root-level `LICENSE` (MIT), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`.
 
+### Fixed — first-run reliability and cross-platform integrity gaps
+Found via targeted user feedback and verified against the real engines, not assumed:
+- **CovenantWin had no fallback when `commands.test` isn't configured.** Unlike `covenant.sh`,
+  which infers a test command from repo topology (`pytest.ini`, `package.json`, `go.mod`, etc.)
+  when none is set, `covenantwin.py` depended entirely on `/init-governance` populating
+  `commands.test` in `covenant_state.json` — and nothing in the shared `v1_release/` prompt
+  content actually instructs writing to that field (it only describes test commands as prose in
+  `CLAUDE.md`). A repo with a real, detectable test stack could permanently fail-closed on its
+  first source commit with no automated way to recover. `covenantwin.py` now has its own
+  topology-based inference (`_infer_test_cmd`), mirroring `covenant.sh`'s stack detection
+  (pytest/Jest/Vitest/npm/Go/Cargo/Maven/Gradle) and, like `covenant.sh`, never persisting the
+  inferred guess back into committed config.
+- **Governance-file integrity drift was only ever caught in CI, disconnected from the edit that
+  caused it.** `verify_governance_integrity.sh` (CovenantMac) ran exclusively from
+  `ci-covenant.yml`; `check_integrity()` (CovenantWin) ran only at `pre-push`/`ci`. Editing a
+  governance file without regenerating `.claude/covenant_integrity.sha256` in the same commit
+  passed pre-commit cleanly and only surfaced later, days removed from the actual edit. Both
+  engines now run this check at every trigger, including `pre-commit`, so drift is caught in the
+  exact commit that introduces it.
+- **Neither installer shipped a `.gitattributes` into the repos it installs into.** The integrity
+  manifest hashes raw on-disk bytes; a plain `git checkout` on a machine with the commonly
+  recommended `core.autocrlf=true` (Windows) silently converts LF to CRLF with zero content
+  change, which breaks the pin — and for the bash-shebang files, breaks the script outright. Both
+  `install.sh` and `covenantwin.py`'s `install()` now write a `.gitattributes` pinning every
+  governance file to `text eol=lf`, backfilled on `--upgrade` for existing installs, and cleaned
+  up symmetrically by `uninstall.sh`/`uninstall.ps1`.
+
 ### Fixed — CI backstop and secrets-scan gaps
 Found by running the real `ci-covenant.yml`/`covenant.yml` workflow against a genuine GitHub
 Actions-equivalent runner (`act` + Docker + `actions/checkout@v4`), not by reading the YAML:

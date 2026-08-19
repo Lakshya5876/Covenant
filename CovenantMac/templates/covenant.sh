@@ -473,6 +473,25 @@ with open('$cache_file', 'w') as f:
 # Fetch org policy from S3 (with fallback)
 _fetch_org_policy_from_s3
 
+# ── STEP 1.6: LOCAL GOVERNANCE-INTEGRITY FRESHNESS CHECK ───────────────────────
+# verify_governance_integrity.sh previously ran only in CI (ci-covenant.yml) —
+# editing a governance file (e.g. covenant.sh itself) without regenerating
+# .claude/covenant_integrity.sha256 in the same commit passed pre-commit and
+# pre-push cleanly and only surfaced days later at the next CI run, completely
+# disconnected in time from the edit that actually caused it. Running the same
+# check here, at commit time, catches the drift in the exact commit that
+# introduced it instead. Guarded on both files existing so this is a no-op
+# before the manifest exists yet (a repo mid-install, or a bats fixture that
+# doesn't scaffold one).
+if [ -f ".claude/covenant_integrity.sha256" ] && [ -f ".githooks/verify_governance_integrity.sh" ]; then
+    if ! _INTEGRITY_OUTPUT=$(bash .githooks/verify_governance_integrity.sh 2>&1); then
+        echo -e "${RED}COVENANT BLOCK: governance file(s) no longer match the pinned integrity manifest (.claude/covenant_integrity.sha256).${RESET}" >&2
+        echo "$_INTEGRITY_OUTPUT" >&2
+        echo "Fix: regenerate the manifest (install.sh --upgrade, or re-run sha256sum over the files listed in .claude/covenant_integrity.sha256) and commit it together with this change." >&2
+        exit 1
+    fi
+fi
+
 # ── STEP 2: TOKEN HARNESS ─────────────────────────────────────────────────────
 TODAY=$(date +%Y-%m-%d)
 COVENANT_TRIGGER="${COVENANT_TRIGGER:-pre-commit}"   # pre-commit or pre-push hook sets this

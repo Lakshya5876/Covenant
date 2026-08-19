@@ -60,6 +60,7 @@ setup() {
     echo '{"mcpServers":{"code-review-graph":{"command":"code-review-graph"}}}' > .mcp.json
     printf 'name: covenant\nrun: bash .githooks/covenant.sh\n' > .github/workflows/covenant.yml
     printf ".claude/session_state.json\n.claude/session_spend.tmp\n.claude/git_cache.json\n.claude/checkpoints/\n__pycache__/\n*.pyc\n" > .gitignore
+    printf ".githooks/covenant.sh text eol=lf\n.githooks/verify_governance_integrity.sh text eol=lf\n.githooks/pre-commit text eol=lf\n.githooks/pre-push text eol=lf\n.claude/hooks/pre_bash_trust_root_guard.sh text eol=lf\n.claude/hooks/graph_freshness_check.py text eol=lf\n.claude/checkpoint_tool.py text eol=lf\n" > .gitattributes
 
     echo "# PRD" > docs/PRD.md
     echo "# TRD" > docs/TRD.md
@@ -175,6 +176,13 @@ teardown() {
     run run_with_pty "$UNINSTALL_WRAPPER" "y" "n" "n"
     [ "$status" -eq 0 ]
     run grep -c "__pycache__/\|\*\.pyc\|\.claude/session_state\.json" .gitignore
+    [ "$status" -eq 1 ]
+}
+
+@test "the .gitattributes entries added for the 7 governance files are cleaned up" {
+    run run_with_pty "$UNINSTALL_WRAPPER" "y" "n" "n"
+    [ "$status" -eq 0 ]
+    run grep -c "text eol=lf" .gitattributes
     [ "$status" -eq 1 ]
 }
 

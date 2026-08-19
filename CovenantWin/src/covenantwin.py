@@ -56,6 +56,63 @@ _SOURCE_PAT = re.compile(r'^(backend/|src/|app/|frontend/)|\.(py|java|go|rs|ts|t
 def _looks_like_source(rel: str) -> bool:
     return bool(_SOURCE_PAT.search(rel.replace('\\', '/')))
 
+_TEST_CMD_SUBDIRS = ('.', 'backend', 'server', 'api', 'frontend', 'web', 'client', 'ui')
+
+def _infer_test_cmd_in_dir(root: Path, subdir: str) -> str | None:
+    # Mirrors covenant.sh's _infer_backend_test_cmd_in_dir (covenant.sh:947-
+    # 1013) stack-by-stack, minus the changed-file scoping optimization (not
+    # essential to correctness — this only needs to find *a* runnable
+    # command, not the narrowest one). Ported because covenantwin.py had no
+    # fallback at all when `commands.test` isn't set: covenant.sh degrades to
+    # this inference and still runs a real test suite; covenantwin.py used
+    # to just permanently fail-closed until a human hand-edited
+    # covenant_state.json, even when `/init-governance` had populated
+    # everything else correctly but missed this one field, or was skipped
+    # entirely. A genuine platform-parity gap, not a documented one.
+    d = root if subdir == '.' else root/subdir
+    if not d.is_dir(): return None
+    prefix = '' if subdir == '.' else f"cd \"{subdir}\" && "
+
+    def _read(p: Path) -> str:
+        try: return p.read_text(encoding='utf-8', errors='replace')
+        except OSError: return ''
+
+    if (d/'pytest.ini').is_file() or (d/'conftest.py').is_file() \
+            or '[tool.pytest' in _read(d/'pyproject.toml') \
+            or '[tool:pytest]' in _read(d/'setup.cfg') \
+            or any('pytest' in _read(p) for p in d.glob('requirements*.txt')):
+        return prefix + 'pytest -x -q --tb=short'
+
+    pkg = d/'package.json'
+    if pkg.is_file():
+        pkg_text = _read(pkg)
+        if '"jest"' in pkg_text or re.search(r'"test".*jest', pkg_text):
+            return prefix + 'npm test -- --passWithNoTests'
+        if 'vitest' in pkg_text:
+            return prefix + 'npx vitest run --passWithNoTests'
+        if '"test"' in pkg_text:
+            return prefix + 'npm test'
+
+    if (d/'go.mod').is_file():
+        return prefix + 'go test ./... -count=1'
+
+    if (d/'Cargo.toml').is_file():
+        return prefix + 'cargo test --quiet'
+
+    if (d/'pom.xml').is_file():
+        return prefix + 'mvn -q test'
+
+    if (d/'build.gradle').is_file() or (d/'build.gradle.kts').is_file():
+        return prefix + './gradlew test --quiet'
+
+    return None
+
+def _infer_test_cmd(root: Path) -> str | None:
+    for subdir in _TEST_CMD_SUBDIRS:
+        cmd = _infer_test_cmd_in_dir(root, subdir)
+        if cmd: return cmd
+    return None
+
 def _is_claude_agent() -> bool:
     # Primary signal only: $CLAUDECODE, set by Claude Code and inherited across
     # backgrounding/detachment (unlike process ancestry) — mirrors the first,
@@ -237,7 +294,11 @@ def covenant(trigger: str):
     # identical fix in covenant.sh (covenant.sh's STEP 1), found and fixed
     # there first via the same direct-execution method.
     if trigger != 'ci' and branch in {'main','master','develop'}: return fail(f"direct commits to '{branch}' are forbidden.")
-    if trigger in ('pre-push', 'ci') and check_integrity(root): return 1
+    # Runs on every trigger, not just pre-push/ci: catches manifest drift in
+    # the exact commit that caused it (a governance file edited without
+    # regenerating covenant_integrity.sha256) instead of one commit later at
+    # push time. Mirrors the identical fix in covenant.sh's new STEP 1.6.
+    if check_integrity(root): return 1
     # 1. Branch and token policy.
     token=state['token']; today=str(dt.date.today())
     if token.get('token_last_reset') != today: token.update(token_spent_today=0, token_last_reset=today)
@@ -284,23 +345,30 @@ def covenant(trigger: str):
                 return fail(f'secret-like material in staged file: {rel}')
     # 3.5. Fail closed, not silently, when source files changed but no test
     # command is configured. Mirrors covenant.sh's dynamic-stack-inference
-    # fail-closed check (covenant.sh:998-1007) — but CovenantWin does not
-    # auto-infer a test runner from repo topology the way covenant.sh does;
-    # it relies entirely on /init-governance (or a human) populating
-    # commands.test. Before this check existed, safe_command() silently
+    # fail-closed check (covenant.sh:1091-1095). Before _infer_test_cmd
+    # existed, this had no fallback at all — safe_command() silently
     # returned 0 for an empty/unconfigured command (see its own `if not
     # command: return 0`), meaning a Windows-governed repo could pass every
     # commit with zero tests ever run, no warning, and no way to tell from
-    # the PASS output alone — a real, confirmed gap against covenant.sh's
-    # documented "fail closed, never silent" guarantee. Scoped to files that
-    # look like source (same classification as the layer-boundary scan) so
-    # docs-only/config-only commits are never blocked by this. GOVERNANCE files
-    # (covenantwin.py itself, a .py file) are excluded from the classification —
-    # otherwise every fresh install's own commit (which stages
-    # .githooks/covenantwin.py before commands.test is ever configured) would
-    # immediately fail-closed-block itself.
-    if any(_looks_like_source(f) for f in files if f not in GOVERNANCE) and not state['commands'].get('test'):
-        return fail('source files changed but no test runner is configured '
+    # the PASS output alone, UNLESS `/init-governance` (or a human) had
+    # explicitly populated commands.test — with no safety net if that step
+    # was skipped or missed this one field. test_cmd resolves explicit
+    # config first, falling back to topology inference exactly like
+    # covenant.sh does; it is deliberately NOT written back into `state` (no
+    # `state['commands']['test'] = ...`), so an inferred guess is used for
+    # this run only and never becomes silently-persisted config nobody
+    # reviewed — same non-persistence covenant.sh's own TEST_RUNNERS follows.
+    # Scoped to files that look like source (same classification as the
+    # layer-boundary scan) so docs-only/config-only commits are never
+    # blocked by this. GOVERNANCE files (covenantwin.py itself, a .py file)
+    # are excluded from the classification — otherwise every fresh install's
+    # own commit (which stages .githooks/covenantwin.py before commands.test
+    # is ever configured) would immediately fail-closed-block itself.
+    test_cmd = state['commands'].get('test') or _infer_test_cmd(root)
+    if test_cmd and not state['commands'].get('test'):
+        print(f'COVENANT: inferred test command (not persisted): {test_cmd}', file=sys.stderr)
+    if any(_looks_like_source(f) for f in files if f not in GOVERNANCE) and not test_cmd:
+        return fail('source files changed but no test runner is configured or could be inferred '
                      '(set commands.test in .claude/covenant_state.json).')
     # 4. Lint (identity-based debt ratchet when baseline.json is populated —
     #    brownfield; zero-tolerance otherwise) + type check.
@@ -321,7 +389,7 @@ def covenant(trigger: str):
     if violations: return fail('layer boundary violation(s): '+ '; '.join(violations[:5]))
     # 6. Tests and coverage: always at push/tier-3, otherwise opt-in.
     requested=os.environ.get('RUN_TESTS','').lower()=='true' or tier3 or trigger in ('pre-push', 'ci')
-    if requested and safe_command(state['commands'].get('test'),root,'tests',timeout*10): return 1
+    if requested and safe_command(test_cmd,root,'tests',timeout*10): return 1
     if requested and state['commands'].get('coverage') and safe_command(state['commands']['coverage'],root,'coverage',timeout): return 1
     # 7. Complexity and frontend checks.
     for key,label in [('complexity','complexity'),('frontend_lint','frontend lint'),('frontend_type','frontend type')]:
@@ -338,6 +406,23 @@ def covenant(trigger: str):
 def _write_integrity_manifest(root: Path):
     manifest = '\n'.join(hashlib.sha256((root/x).read_bytes()).hexdigest()+'  '+x for x in GOVERNANCE)+'\n'
     (root/'.claude/covenant_integrity.sha256').write_text(manifest, encoding='utf-8')
+
+def _write_gitattributes(root: Path):
+    # Protects the integrity-pinned governance files from a common Windows
+    # git config (core.autocrlf=true) silently rewriting their bytes on
+    # checkout. check_integrity() hashes raw on-disk bytes; a plain
+    # `git checkout` with autocrlf enabled and no .gitattributes converts LF
+    # to CRLF with zero content change, which breaks the pin. Mirrors the
+    # identical fix in CovenantMac's install.sh (_write_gitattributes).
+    # Idempotent and called from both install() and upgrade() so existing
+    # installs get backfilled.
+    path = root/'.gitattributes'
+    existing = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
+    entries = [f'{g} text eol=lf' for g in GOVERNANCE]
+    with path.open('a', encoding='utf-8', newline='\n') as f:
+        for e in entries:
+            if e not in existing:
+                f.write(e + '\n')
 
 def _write_hook_shim(src: Path, dst: Path, trigger: str):
     # Reuses CovenantMac's actual pre-commit/pre-push scripts verbatim (SKIP_COVENANT
@@ -611,6 +696,7 @@ def install(args):
         _seed_baseline(root)
 
     _write_integrity_manifest(root)
+    _write_gitattributes(root)
 
     gitignore = root/'.gitignore'
     entries = ['.claude/session_state.json', '.claude/session_spend.tmp', '.claude/git_cache.json', '.claude/checkpoints/']
@@ -626,6 +712,7 @@ def install(args):
     print('  Init command: .claude/commands/init-governance.md')
     print('  Trust-root:   .claude/settings.json, .claude/hooks/pre_bash_trust_root_guard.sh')
     print('  Integrity:    .claude/covenant_integrity.sha256')
+    print('  Line endings: .gitattributes (pins governance files to LF)')
     print('  CODEOWNERS:   .github/CODEOWNERS (placeholder team - edit it)')
     if basket == 'brownfield':
         print('  Debt baseline: .claude/baseline.json (unpopulated - /init-governance fills it)')
@@ -733,6 +820,8 @@ def upgrade(args):
 
     _write_integrity_manifest(root)
     print('Integrity manifest re-pinned (.claude/covenant_integrity.sha256).')
+    _write_gitattributes(root)
+    print('Governance files pinned to LF in .gitattributes (backfilled for existing installs).')
 
     sp = root/STATE_REL
     state = load(sp, state_default())
