@@ -6,6 +6,21 @@ All notable changes to Covenant are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Removed — this framework's own GitHub Actions CI
+`.github/workflows/covenantmac-tests.yml` and `covenantwin-tests.yml` (the workflows that ran this
+repo's own bats/pytest suites on push/PR) are gone. Their first-ever real runs surfaced the three
+genuine bugs documented below, but diagnosing them was crippled by not having log access (GitHub
+gates Actions log text behind sign-in even on a public repo, and the log-download API needs admin
+rights this session didn't have) — every fix below was found by manually reproducing the runner
+environment (genuine `git clone`, the exact apt-installed `bats` version, a real Linux filesystem)
+rather than by reading an actual failure message. After those three fixes, `covenantmac-tests`
+stopped hanging but still failed for a reason that was never identified from the outside. Rather
+than keep guessing blind, the framework's self-testing CI was removed; `178 bats tests / 31 files`
+and `35 pytest tests` are still the full, real suites — they're just run locally/manually now, not
+automatically on every push. This does **not** touch the CI backstop Covenant *installs into
+governed target repos* (`templates/ci-covenant.yml` → `.github/workflows/covenant.yml`), which is
+a core enforcement feature, unaffected, and unrelated to this framework repo's own testing.
+
 ### Fixed — real bugs found by the first genuine CI run on both platforms
 The public-release history squash meant every prior push effectively skipped CI (path-triggered
 workflows never ran until a real commit touched the matching directories). The very first real

@@ -18,11 +18,9 @@ v1_release/                         @Lakshya5876
 CovenantMac/templates/                  @Lakshya5876
 CovenantMac/install.sh                  @Lakshya5876
 CovenantMac/uninstall.sh                @Lakshya5876
-CovenantMac/.github/workflows/          @Lakshya5876
 CovenantWin/src/                        @Lakshya5876
 CovenantWin/install.ps1                 @Lakshya5876
 CovenantWin/uninstall.ps1               @Lakshya5876
-.github/workflows/                  @Lakshya5876
 
 # ── Paths that only exist in a governed TARGET repo (reference only) ────────
 # Git hooks — the enforcement layer

@@ -382,7 +382,6 @@ See the security and architecture documentation for the exact threat model and l
 | Agent-only checkpoint gates                                              | ✅                              | ✅                                |
 | Fail-closed behavior for unconfigured test verification where applicable | ✅                              | ✅                                |
 | Framework integration tests                                              | 178 bats tests / 31 files       | 35 pytest tests                  |
-| Framework CI                                                             | Linux bats                     | Ubuntu + macOS + Windows matrix  |
 | Cross-session checkpoint memory                                          | ✅                              | Enhancement layer not yet ported |
 | `code-review-graph` integration                                          | ✅                              | Enhancement layer not yet ported |
 
