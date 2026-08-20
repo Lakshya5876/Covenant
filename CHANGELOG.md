@@ -6,6 +6,36 @@ All notable changes to Covenant are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed — real bugs found by the first genuine CI run on both platforms
+The public-release history squash meant every prior push effectively skipped CI (path-triggered
+workflows never ran until a real commit touched the matching directories). The very first real
+`covenantmac-tests`/`covenantwin-tests` runs on genuine GitHub Actions runners (not Windows, not a
+Windows-backed WSL mount) surfaced bugs invisible in all prior local testing:
+- **CovenantWin's git hooks never actually fired on real Linux/macOS.** `_write_hook_shim` wrote
+  `pre-commit`/`pre-push` without setting the executable bit; git silently ignores a
+  non-executable hook (an advisory hint, not an error), so local enforcement was a silent no-op
+  on any genuine install — masked entirely on Windows and on a Windows-backed filesystem (e.g.
+  WSL's `/mnt/` mount), where permission bits aren't meaningfully enforced the same way. Fixed
+  with an explicit `os.chmod(dst, 0o755)`.
+- **CovenantWin's hooks hardcoded `python`, which doesn't exist on stock Ubuntu/Debian.** Every
+  hook failed with `exec: python: not found` on a machine that only ships `python3` (Debian
+  deliberately doesn't alias the unversioned name unless a separate package is installed — the
+  common case, not an edge case). Resolved at hook-run time with
+  `$(command -v python || command -v python3)`, preserving the original Windows-specific reason
+  for preferring `python` while no longer breaking everywhere else.
+- **`_bounded_git_fetch`'s timeout didn't kill `git fetch`'s child process.** Its 5-second
+  wall-clock bound killed only the parent `git fetch` PID; the `git-remote-https` helper process
+  it spawns for an HTTPS remote survived as an orphan, still attempting to connect, for its own
+  much longer OS-level TCP timeout — holding the caller's inherited stdout/stderr open the whole
+  time. On a genuine Linux CI runner this was enough to make the entire test suite invocation
+  hang well past every individual test having already passed. Fixed in both `install.sh` and
+  `uninstall.sh`'s copies of this function with `pkill -9 -P "$fetch_pid"` before killing the
+  parent.
+- Two bats fixtures (`graph_watchdog.bats`) backgrounded a `sleep 60`/fake-server process whose
+  teardown didn't reliably reap it across bats' per-file subshell boundaries — reduced to 5s and
+  hardened teardown/`run_tests.sh` with defense-in-depth process cleanup, so a missed reap now
+  self-resolves in seconds instead of leaking for the rest of the run.
+
 ### Added — CovenantWin governance-generation parity
 CovenantWin moves from mechanical-enforcement-only to genuine parity with CovenantMac for the
 install-time experience, verified with 29 passing end-to-end tests:

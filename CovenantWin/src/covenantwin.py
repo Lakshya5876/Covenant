@@ -436,10 +436,33 @@ def _write_hook_shim(src: Path, dst: Path, trigger: str):
     # chain used (there is no separate PowerShell launcher script anymore).
     text = src.read_text(encoding='utf-8')
     old = f'COVENANT_TRIGGER={trigger} exec "$(git rev-parse --git-dir)"/../.githooks/covenant.sh'
-    new = f'COVENANT_TRIGGER={trigger} exec python "$(git rev-parse --git-dir)"/../.githooks/covenantwin.py covenant --trigger {trigger}'
+    # Prefer the bare `python` name (Windows: `python3` there frequently
+    # resolves to a non-functional Microsoft Store stub — see the guard-copy
+    # comment below for the same reasoning), but fall back to `python3` when
+    # `python` doesn't exist on PATH at all. A confirmed, real gap: a raw
+    # Ubuntu/Debian install (WSL included) commonly ships only `python3` —
+    # Debian deliberately doesn't alias the unversioned name unless
+    # `python-is-python3` is installed — so a hardcoded `python` here made
+    # every git hook silently no-op with "exec: python: not found" on any
+    # such machine. `$(command -v python || command -v python3)` resolves at
+    # hook-run time, not install time, so it self-heals if the machine's
+    # available interpreter changes later.
+    interpreter = '$(command -v python || command -v python3)'
+    new = f'COVENANT_TRIGGER={trigger} exec {interpreter} "$(git rev-parse --git-dir)"/../.githooks/covenantwin.py covenant --trigger {trigger}'
     if old not in text:
         raise RuntimeError(f'{src} did not contain the expected delegation line — CovenantMac template may have changed; update _write_hook_shim.')
     dst.write_text(text.replace(old, new), encoding='utf-8', newline='\n')
+    # Git invokes pre-commit/pre-push directly via their shebang line — it
+    # silently skips (not errors) a hook file that isn't marked executable,
+    # printing only an advisory hint ("hook was ignored because it's not set
+    # as executable"). Without this, every real Linux/macOS install has git
+    # hooks that never fire at all — the whole local enforcement layer is a
+    # silent no-op — while Windows and a Windows-backed filesystem (e.g. WSL's
+    # /mnt/ DrvFs mount) mask the bug entirely, since permission bits aren't
+    # meaningfully enforced there. os.chmod is a genuine no-op on native
+    # Windows (NTFS has no POSIX execute bit), so this is safe to call
+    # unconditionally on every platform.
+    os.chmod(dst, 0o755)
 
 def _extract_prompt_block(init_pkg_path: Path) -> str:
     lines = init_pkg_path.read_text(encoding='utf-8').splitlines(keepends=True)
@@ -669,11 +692,16 @@ def install(args):
     # fallback means a MISSING python3 fails OPEN (silently allows every
     # command) rather than blocking — a real risk on Windows, where `python3`
     # is frequently absent or resolves to a non-functional Microsoft Store
-    # stub while `python` works. Every other CovenantWin-deployed script already
-    # invokes `python`, not `python3` (see _write_hook_shim) — normalize this
-    # copy to match, rather than silently inheriting a fail-open on Windows.
-    guard_text = guard_text.replace('python3', 'python')
-    (root/'.claude/hooks/pre_bash_trust_root_guard.sh').write_text(guard_text, encoding='utf-8', newline='\n')
+    # stub while `python` works. Resolved the same robust way as the hook
+    # shim's delegation line (see _write_hook_shim): prefer `python`, fall
+    # back to `python3` — a bare `python` replacement here previously broke
+    # this guard outright ("command not found") on any real Ubuntu/Debian
+    # machine that only ships `python3`, which is the common case, not an
+    # edge case.
+    guard_text = guard_text.replace('python3', '$(command -v python || command -v python3)')
+    guard_dst = root/'.claude/hooks/pre_bash_trust_root_guard.sh'
+    guard_dst.write_text(guard_text, encoding='utf-8', newline='\n')
+    os.chmod(guard_dst, 0o755)  # invoked via explicit `bash`, but +x for consistency with CovenantMac
 
     _write_init_command(root, init_pkg_dst_name)
     _write_trust_root_settings(root, dev_guide_dst_name, init_pkg_dst_name)
@@ -797,8 +825,11 @@ def upgrade(args):
         shutil.copy2(v1_release/basket_dir/init_pkg_dst_name, root/init_pkg_dst_name)
 
         guard_text = (covenantmac_templates/'pre_bash_trust_root_guard.sh').read_text(encoding='utf-8')
-        guard_text = guard_text.replace('__DEV_GUIDE_DST__', dev_guide_dst_name).replace('__INIT_PKG_DST__', init_pkg_dst_name).replace('python3', 'python')
-        (root/'.claude/hooks/pre_bash_trust_root_guard.sh').write_text(guard_text, encoding='utf-8', newline='\n')
+        guard_text = guard_text.replace('__DEV_GUIDE_DST__', dev_guide_dst_name).replace('__INIT_PKG_DST__', init_pkg_dst_name) \
+            .replace('python3', '$(command -v python || command -v python3)')
+        guard_dst = root/'.claude/hooks/pre_bash_trust_root_guard.sh'
+        guard_dst.write_text(guard_text, encoding='utf-8', newline='\n')
+        os.chmod(guard_dst, 0o755)
 
         _write_init_command(root, init_pkg_dst_name)
         _write_trust_root_settings(root, dev_guide_dst_name, init_pkg_dst_name)

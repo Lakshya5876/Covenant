@@ -499,6 +499,20 @@ _bounded_git_fetch() {
         waited=$((waited + 1))
     done
     if kill -0 "$fetch_pid" 2>/dev/null; then
+        # `git fetch` over https spawns a git-remote-https CHILD helper
+        # process that does the actual DNS/TCP work — killing only the
+        # parent `git fetch` PID leaves that child running, orphaned, still
+        # trying to connect against an unroutable/unreachable address for
+        # its own (much longer) OS-level TCP connect timeout. That orphan
+        # inherits this script's stdout/stderr file descriptors, so anything
+        # downstream waiting on those pipes to close (bats included, when
+        # this runs from inside the test suite) hangs indefinitely even
+        # though this function itself correctly returns within ~5s. Found
+        # via a real hang reproduced against a genuinely unroutable address
+        # inside the actual test suite, not by inspection — the top-level
+        # kill alone looked sufficient until traced with a live process
+        # list. pkill -P catches direct children before killing the parent.
+        pkill -9 -P "$fetch_pid" 2>/dev/null || true
         kill -9 "$fetch_pid" 2>/dev/null
         wait "$fetch_pid" 2>/dev/null
         return 1

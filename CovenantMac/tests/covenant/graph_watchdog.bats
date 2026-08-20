@@ -14,7 +14,10 @@ setup() {
 #!/usr/bin/env bash
 case "$1" in
     build) exit 0 ;;
-    serve) sleep 60 ;;
+    # 5s, not 60s: long enough for the test to observe this PID as "alive",
+    # short enough that even a cleanup gap self-resolves quickly instead of
+    # leaking a process that outlives the whole test run by up to a minute.
+    serve) sleep 5 ;;
     *) exit 0 ;;
 esac
 EOF
@@ -28,7 +31,23 @@ EOF
 teardown() {
     if [ -n "${FAKE_SERVER_PID:-}" ]; then
         kill -9 "$FAKE_SERVER_PID" 2>/dev/null || true
+        wait "$FAKE_SERVER_PID" 2>/dev/null || true
     fi
+    # Belt-and-suspenders beyond the single tracked PID above: covenant.sh's
+    # own _ensure_graph_freshness spawns a SEPARATE, untracked
+    # `nohup code-review-graph build &` whenever a graph-relevant file
+    # changes (true for several tests in this file) — that child is never
+    # captured by FAKE_SERVER_PID and previously survived every test,
+    # leaking a live process. On a genuine Linux CI runner (unlike this
+    # framework's own local dev testing on Windows/WSL, where process/fd
+    # inheritance behaves differently) a still-open stdout/stderr file
+    # descriptor held by a leaked child is exactly what makes bats itself
+    # hang waiting for EOF at the very end of a full-suite run — found by
+    # actually running the real CI workflow, not by inspection. Matching
+    # against this file's own .fakebin path (not a bare "code-review-graph"
+    # pattern) scopes the kill to processes THIS test file spawned only.
+    pkill -9 -f "${TEST_REPO:-__unset__}/.fakebin/code-review-graph" 2>/dev/null || true
+    wait 2>/dev/null || true
     teardown_covenant_repo
 }
 
@@ -72,7 +91,7 @@ _commit_non_graph_file() {
 
 @test "watchdog treats a PID reused by an unrelated process as crashed" {
     _commit_non_graph_file
-    sleep 60 &
+    sleep 5 &  # same 5s-not-60s reasoning as the .fakebin serve case above
     FAKE_SERVER_PID=$!
     sleep 0.2
     echo "$FAKE_SERVER_PID" > .claude/graph.pid
