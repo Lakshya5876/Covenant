@@ -29,7 +29,7 @@ The pre-commit hook fires covenant.sh. Here is the exact sequence:
 | **6d — Coverage** | Only runs if tests ran. Blocks if below `thresholds.coverage_pct` (default: 80%). | Only if tests ran | — |
 | **6e — Complexity** | Scoped complexity check. Blocks if above `thresholds.complexity_max` (default: 10). | Yes on violation | < 1 s |
 | **7 — Frontend** | Runs `FRONTEND_LINT_CMD`, `FRONTEND_TYPE_CMD` if set. Tests run via the shared test queue. | Yes on failure | varies |
-| **8 — Receipt + ledger** | Writes the fingerprint receipt to `covenant_state.json receipts{}`. Advances `last_pass_sha`. Clears `session_spend.tmp`. | Never | < 0.2 s |
+| **8 — Receipt + ledger** | Writes the fingerprint receipt to `.claude/covenant_receipts.json` (gitignored — never `covenant_state.json`, which is committed and would create a circular tree-hash dependency). Advances `last_pass_sha` in `covenant_state.json` and re-stages it so the update rides along in this commit. Clears `session_spend.tmp`. | Never | < 0.2 s |
 
 A clean commit with no lint/type issues and tests skipped: **1–3 seconds end-to-end.**
 

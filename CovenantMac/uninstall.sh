@@ -245,6 +245,7 @@ FRAMEWORK_GITIGNORE_ENTRIES=(
     ".claude/session_state.json"
     ".claude/session_spend.tmp"
     ".claude/git_cache.json"
+    ".claude/covenant_receipts.json"
     ".claude/checkpoints/"
     "__pycache__/"
     "*.pyc"

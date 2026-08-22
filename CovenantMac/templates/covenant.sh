@@ -27,6 +27,9 @@ set -euo pipefail
 
 # ── Constants ────────────────────────────────────────────────────────────────
 COVENANT_STATE=".claude/covenant_state.json"
+# Gitignored, never committed — see the comment on _receipt_write for why
+# receipts specifically cannot live inside a file that gets committed.
+RECEIPTS_FILE=".claude/covenant_receipts.json"
 SESSION_SPEND=".claude/session_spend.tmp"
 GIT_CACHE=".claude/git_cache.json"
 BASELINE=".claude/baseline.json"
@@ -81,8 +84,8 @@ with open('$1', 'w') as f:
 
 _json_append_audit() {
     # Append one entry to token.token_audit_log; prune entries older than 90 days.
-    # Guard matches every other COVENANT_STATE-touching function (_receipt_write,
-    # _receipt_has_pass) — without it, a missing ledger (accidental deletion,
+    # Guard matches every other COVENANT_STATE-touching function — without it,
+    # a missing ledger (accidental deletion,
     # a bad merge, disk issue, or simply testing hook functions in isolation
     # without the full install flow) turned the LAST call in covenant.sh's
     # success path into an unguarded FileNotFoundError. Under `set -e` that
@@ -133,33 +136,50 @@ _verify_context_anchoring() {
 # ── Fingerprint receipt helpers (spec §4.2 — two distinct forms) ──────────────
 # COMMIT_TREE_FP keys receipts (pre-commit writes, pre-push verifies).
 # Receipts are pruned to the most recent 50 to bound ledger growth.
+#
+# Deliberately stored in RECEIPTS_FILE, NOT inside COVENANT_STATE, and
+# RECEIPTS_FILE is gitignored, never committed. A receipt is keyed by the
+# tree hash of the commit it describes — if it lived inside a file that is
+# itself part of that same tree, writing the receipt would change the
+# file's content, which changes the tree hash, which invalidates the very
+# key the receipt was just written under: a real, unresolvable circular
+# dependency (confirmed by tracing it through, not assumed). Keeping
+# receipts in a separate untracked file sidesteps that entirely, and as a
+# second, independent benefit, receipts (and the rest of the ledger) never
+# show up as permanently-modified-but-unstaged in `git status` after every
+# commit — see STEP 8's re-stage of COVENANT_STATE below for the fields
+# that legitimately do belong in the committed file.
 _receipt_write() {
     # Usage: _receipt_write <tree_hash> <branch>
     [ -f "$COVENANT_STATE" ] || return 0
     [ -n "$1" ] || return 0
+    [ -f "$RECEIPTS_FILE" ] || echo '{}' > "$RECEIPTS_FILE" 2>/dev/null
     python3 -c "
 import json
 from datetime import datetime, timezone
-with open('$COVENANT_STATE') as f:
-    d = json.load(f)
+try:
+    with open('$RECEIPTS_FILE') as f:
+        d = json.load(f)
+except (OSError, json.JSONDecodeError):
+    d = {}
 r = d.setdefault('receipts', {})
 r['$1'] = {'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'branch': '$2', 'outcome': 'pass'}
 # Bound growth: keep the 50 most recent by timestamp
 if len(r) > 50:
     keep = sorted(r.items(), key=lambda kv: kv[1].get('timestamp',''), reverse=True)[:50]
     d['receipts'] = dict(keep)
-with open('$COVENANT_STATE', 'w') as f:
+with open('$RECEIPTS_FILE', 'w') as f:
     json.dump(d, f, indent=2)
 " 2>/dev/null
 }
 
 _receipt_has_pass() {
     # Usage: _receipt_has_pass <tree_hash> -> echoes "yes" or "no"
-    if [ ! -f "$COVENANT_STATE" ] || [ -z "$1" ]; then echo "no"; return 0; fi
+    if [ ! -f "$RECEIPTS_FILE" ] || [ -z "$1" ]; then echo "no"; return 0; fi
     python3 -c "
 import json
 try:
-    with open('$COVENANT_STATE') as f:
+    with open('$RECEIPTS_FILE') as f:
         d = json.load(f)
     r = d.get('receipts', {}).get('$1', {})
     print('yes' if r.get('outcome') == 'pass' else 'no')
@@ -1423,14 +1443,6 @@ if [ -f "$COVENANT_STATE" ]; then
     rm -f "$SESSION_SPEND"
 fi
 
-# Write the fingerprint receipt keyed by COMMIT_TREE_FP so pre-push can verify
-# this exact tree was verified. Pre-commit writes the index tree; a no-receipt
-# pre-push that reaches here writes its own (HEAD tree) receipt.
-if [ -n "$COMMIT_TREE_FP" ]; then
-    _receipt_write "$COMMIT_TREE_FP" "$CURRENT_BRANCH"
-    echo -e "${GREEN}COVENANT: receipt written for tree ${COMMIT_TREE_FP:0:12}.${RESET}" >&2
-fi
-
 # Watchdog runs at pre-push only — the natural checkpoint before Claude Code
 # next queries the graph, and cheap enough not to add per-commit overhead.
 # _ensure_graph_freshness (below) already self-heals the crash case whenever
@@ -1442,6 +1454,42 @@ fi
 _ensure_graph_freshness
 
 _json_append_audit "$NOW_ISO" "$COVENANT_TRIGGER" "$TOTAL_SPENT" "pass"
+
+# Re-stage COVENANT_STATE and write the receipt LAST, only after every step
+# above that could touch it — the ledger fields, graph-freshness/watchdog's
+# mcp_graph bookkeeping, and the audit-log append just above — has already
+# run. A single re-stage this late captures the file's truly final content
+# for this pass; doing it any earlier (this fix's own first attempt did,
+# right after the ledger fields) left the LATER writes (specifically
+# _json_append_audit's own token_audit_log entry) unstaged again, silently
+# reintroducing the exact bug this is meant to close — found by directly
+# reproducing and inspecting `git status` after a real commit, not assumed.
+# This is what actually fixes COVENANT_STATE being left
+# permanently-modified-but-unstaged after every commit (a real, confirmed
+# bug: it can even block an ordinary `git checkout` — "local changes would
+# be overwritten"). See RECEIPTS_FILE's comment for why receipts
+# specifically live in a separate file rather than here. Pre-commit only:
+# at pre-push there is no new commit for this update to ride along in, so
+# it's accepted as a disclosed gap (see the "tracked files with unstaged
+# changes" WARN elsewhere) rather than force an unrequested amend/commit on
+# the user's behalf.
+if [ "$COVENANT_TRIGGER" = "pre-commit" ] && [ -f "$COVENANT_STATE" ]; then
+    git add "$COVENANT_STATE" 2>/dev/null || true
+    # Recompute now that the index reflects covenant_state.json's true final
+    # content for this pass — anything computed earlier (STEP 4.5) would be
+    # stale relative to what git will actually commit, which would make the
+    # receipt below silently never match at pre-push, defeating the
+    # fast-path on every single commit.
+    COMMIT_TREE_FP=$(git write-tree 2>/dev/null || echo "$COMMIT_TREE_FP")
+fi
+
+# Write the fingerprint receipt keyed by COMMIT_TREE_FP so pre-push can verify
+# this exact tree was verified. Pre-commit writes the index tree; a no-receipt
+# pre-push that reaches here writes its own (HEAD tree) receipt.
+if [ -n "$COMMIT_TREE_FP" ]; then
+    _receipt_write "$COMMIT_TREE_FP" "$CURRENT_BRANCH"
+    echo -e "${GREEN}COVENANT: receipt written for tree ${COMMIT_TREE_FP:0:12}.${RESET}" >&2
+fi
 
 # "spend" rather than the more obvious field label here — this line is
 # itself part of covenant.sh, committed as .githooks/covenant.sh on every

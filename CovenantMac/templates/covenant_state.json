@@ -78,6 +78,5 @@
 
   "session_state_path": ".claude/session_state.json",
 
-  "_receipts_comment": "Keyed by COMMIT_TREE_FP (git tree hash of the committed index). Written by pre-commit after all checks pass; verified by pre-push. Never keyed by the working-tree fingerprint.",
-  "receipts": {}
+  "_receipts_comment": "Receipts live in .claude/covenant_receipts.json, not here — that file is gitignored, never committed. Keeping them out of this (committed) file avoids a real circular dependency: a receipt is keyed by the tree hash of the commit it describes, and this file is part of that same tree, so writing the receipt into it would change its own hash out from under itself."
 }

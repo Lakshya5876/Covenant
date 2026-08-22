@@ -176,6 +176,45 @@ teardown_upgrade_fixture() {
     teardown_upgrade_fixture
 }
 
+@test "--upgrade migrates pre-split receipts out of covenant_state.json, merging with covenant_receipts.json" {
+    # Simulates an install from before the receipts split: an old
+    # covenant_state.json with receipts written inline. --upgrade must move
+    # them into covenant_receipts.json (merging with, not clobbering,
+    # anything already there) rather than leave them orphaned forever in a
+    # field nothing reads anymore.
+    setup_upgrade_fixture
+    # Basket detection needs a dev-guide file present to run
+    # _write_checkpoint_memory (which creates the governance files the
+    # integrity manifest step hashes); without one, upgrade bails out of
+    # scaffolding before ever reaching the receipts migration. Content is
+    # irrelevant here — this test only cares about the receipts migration.
+    echo "stale placeholder" > v1_claude_code_development_guide_new.md
+    echo "stale placeholder" > v1_implementation_package_new.md
+    python3 -c "
+import json
+with open('.claude/covenant_state.json') as f: d = json.load(f)
+d['receipts'] = {'old-tree-abc': {'timestamp': '2020-01-01T00:00:00Z', 'branch': 'main', 'outcome': 'pass'}}
+with open('.claude/covenant_state.json', 'w') as f: json.dump(d, f)
+"
+    echo '{"receipts": {"newer-tree-xyz": {"outcome": "pass"}}}' > .claude/covenant_receipts.json
+
+    run env COVENANT_SKIP_STALENESS_CHECK=1 bash "${FRAMEWORK_ROOT}/install.sh" --upgrade
+    [ "$status" -eq 0 ]
+
+    run python3 -c "
+import json
+with open('.claude/covenant_state.json') as f:
+    assert 'receipts' not in json.load(f)
+with open('.claude/covenant_receipts.json') as f:
+    merged = json.load(f)['receipts']
+assert 'old-tree-abc' in merged
+assert 'newer-tree-xyz' in merged
+assert merged['old-tree-abc']['outcome'] == 'pass'
+"
+    [ "$status" -eq 0 ]
+    teardown_upgrade_fixture
+}
+
 @test "--upgrade generates /reconcile-governance when the dev guide's content actually changed" {
     setup_upgrade_fixture
     echo "this is deliberately stale content, nothing like the real file" > v1_claude_code_development_guide_new.md

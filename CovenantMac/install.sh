@@ -738,7 +738,15 @@ except Exception:
     _fetch "templates/ci-covenant.yml" ".github/workflows/covenant.yml"
     _success "CI governance workflow updated (.github/workflows/covenant.yml)"
 
-    # Bump version in covenant_state.json, preserve all user-owned fields
+    # Bump version in covenant_state.json, preserve all user-owned fields.
+    # Also migrates any receipts written by a pre-split version of
+    # covenant.sh out of covenant_state.json (committed) into
+    # covenant_receipts.json (gitignored) — see covenant.sh's RECEIPTS_FILE
+    # comment for why receipts can't stay in the committed file. Without
+    # this, an existing repo's old receipts would just sit orphaned in
+    # covenant_state.json forever: nothing reads them from there anymore,
+    # but this same block would keep writing them back unchanged on every
+    # future upgrade too.
     python3 - << PYEOF
 import json
 from datetime import datetime, timezone
@@ -746,6 +754,16 @@ with open('.claude/covenant_state.json') as f:
     d = json.load(f)
 d['framework_version'] = '${FRAMEWORK_SEMVER}'
 d['framework_last_upgrade'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+old_receipts = d.pop('receipts', None)
+if old_receipts:
+    try:
+        with open('.claude/covenant_receipts.json') as f:
+            r = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        r = {}
+    r.setdefault('receipts', {}).update(old_receipts)
+    with open('.claude/covenant_receipts.json', 'w') as f:
+        json.dump(r, f, indent=2)
 with open('.claude/covenant_state.json', 'w') as f:
     json.dump(d, f, indent=2)
 PYEOF
@@ -773,7 +791,8 @@ PYEOF
     echo "  • .claude/baseline.json (debt ratchet — untouched)"
     echo "  • CLAUDE.md (repo constitution — untouched)"
     echo "  • .mcp.json (graph config — untouched)"
-    echo "  • covenant_state.json: receipts, token data, thresholds, core_files"
+    echo "  • covenant_state.json: token data, thresholds, core_files"
+    echo "  • .claude/covenant_receipts.json (receipts — migrated here if found in the old location)"
     echo "  • Any repo-specific permissions.allow entries already in settings.json"
     echo ""
     echo "This upgrade re-pinned .claude/covenant_integrity.sha256 — CI will fail until"
@@ -1200,6 +1219,7 @@ GITIGNORE_ENTRIES=(
     ".claude/session_state.json"
     ".claude/session_spend.tmp"
     ".claude/git_cache.json"
+    ".claude/covenant_receipts.json"
     ".claude/checkpoints/"
     ".env"
     ".env.*"

@@ -19,6 +19,16 @@ import argparse, datetime as dt, difflib, fnmatch, hashlib, json, os, re, shutil
 from pathlib import Path
 
 STATE_REL = Path('.claude/covenant_state.json')
+# Gitignored, never committed. A receipt is keyed by the tree hash of the
+# commit it describes; STATE_REL is itself part of that tree, so writing a
+# receipt into STATE_REL would change STATE_REL's own content, which changes
+# the tree hash, which invalidates the very key the receipt was just written
+# under — a real, unresolvable circular dependency (traced through, not
+# assumed; mirrors covenant.sh's identical RECEIPTS_FILE split). Keeping
+# receipts separate also means STATE_REL no longer needs the receipt write
+# folded into the commit it describes, so it can't leave the working tree
+# permanently modified-but-unstaged the way it did before this split.
+RECEIPTS_REL = Path('.claude/covenant_receipts.json')
 BASELINE_REL = Path('.claude/baseline.json')
 # No separate PowerShell launcher script here — pre-commit/pre-push invoke this engine directly (see
 # _write_hook_shim), removing the sh -> PowerShell -> Python hop the original
@@ -191,8 +201,11 @@ def atomic_json(path: Path, obj):
 def state_default():
     return {'framework_version':'1.0.0-win','last_pass_sha':{},'last_pass_timestamp':None,
       'thresholds':{'coverage_pct':80,'complexity_max':10,'command_timeout_sec':30},
-      'core_files':[],'receipts':{},'token':{'token_budget':None,'token_spent_today':0,'token_last_reset':None,'token_audit_log':[]},
+      'core_files':[],'token':{'token_budget':None,'token_spent_today':0,'token_last_reset':None,'token_audit_log':[]},
       'commands':{'lint':None,'type':None,'test':None,'coverage':None,'complexity':None,'frontend_lint':None,'frontend_type':None}}
+
+def receipts_default():
+    return {'receipts': {}}
 
 def changed_files(root: Path, state, trigger: str = 'pre-commit'):
     branch = run(['git','branch','--show-current'],root).stdout.strip()
@@ -394,12 +407,29 @@ def covenant(trigger: str):
     # 7. Complexity and frontend checks.
     for key,label in [('complexity','complexity'),('frontend_lint','frontend lint'),('frontend_type','frontend type')]:
         if safe_command(state['commands'].get(key),root,label,timeout): return 1
-    # 8. Receipt and auditable state.
-    tree=run(['git','write-tree'],root).stdout.strip() if trigger=='pre-commit' else run(['git','rev-parse','HEAD^{tree}'],root).stdout.strip()
-    if tree: state.setdefault('receipts',{})[tree]={'timestamp':dt.datetime.now(dt.timezone.utc).isoformat(),'branch':branch,'outcome':'pass'}
+    # 8. Ledger update + re-stage, so it rides along in the commit that
+    # triggered it instead of leaving STATE_REL permanently
+    # modified-but-unstaged after every commit — a real, confirmed bug: it
+    # can even block an ordinary `git checkout` ("local changes would be
+    # overwritten"). Pre-commit only: at pre-push there is no new commit for
+    # this update to ride along in, so it's accepted as a disclosed gap
+    # rather than force an unrequested amend/commit on the user's behalf.
     state['last_pass_sha'][branch]=run(['git','rev-parse','HEAD'],root).stdout.strip(); state['last_pass_timestamp']=dt.datetime.now(dt.timezone.utc).isoformat()
     token['token_spent_today']+=active; token['token_audit_log']=(token.get('token_audit_log',[])+[{'timestamp':state['last_pass_timestamp'],'trigger':trigger,'outcome':'pass'}])[-1000:]
     atomic_json(sp,state)
+    if trigger=='pre-commit':
+        run(['git','add',str(STATE_REL)],root)
+    # Receipt: computed AFTER the re-stage above (pre-commit) so it's keyed
+    # by the tree that will actually be committed, not a now-stale snapshot
+    # from before STATE_REL's ledger update existed — see RECEIPTS_REL's
+    # comment for the full reasoning. At pre-push nothing changes the index
+    # between here and HEAD, so HEAD^{tree} is already accurate.
+    tree=run(['git','write-tree'],root).stdout.strip() if trigger=='pre-commit' else run(['git','rev-parse','HEAD^{tree}'],root).stdout.strip()
+    if tree:
+        rp=root/RECEIPTS_REL
+        receipts=load(rp,receipts_default())
+        receipts.setdefault('receipts',{})[tree]={'timestamp':dt.datetime.now(dt.timezone.utc).isoformat(),'branch':branch,'outcome':'pass'}
+        atomic_json(rp,receipts)
     print(f'COVENANT PASS: all checks clean | branch={branch} | mode={mode} | tier3={str(tier3).lower()} | tests={"ran" if requested else "skipped"}',file=sys.stderr)
     return 0
 
@@ -420,6 +450,19 @@ def _write_gitattributes(root: Path):
     existing = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
     entries = [f'{g} text eol=lf' for g in GOVERNANCE]
     with path.open('a', encoding='utf-8', newline='\n') as f:
+        for e in entries:
+            if e not in existing:
+                f.write(e + '\n')
+
+def _write_gitignore(root: Path):
+    # Idempotent and called from both install() and upgrade() so an existing
+    # install gets backfilled with any entry added after it was first set up
+    # (e.g. RECEIPTS_REL, added when receipts moved out of STATE_REL).
+    path = root/'.gitignore'
+    entries = ['.claude/session_state.json', '.claude/session_spend.tmp', '.claude/git_cache.json',
+               str(RECEIPTS_REL).replace('\\', '/'), '.claude/checkpoints/']
+    existing = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
+    with path.open('a', encoding='utf-8') as f:
         for e in entries:
             if e not in existing:
                 f.write(e + '\n')
@@ -725,14 +768,7 @@ def install(args):
 
     _write_integrity_manifest(root)
     _write_gitattributes(root)
-
-    gitignore = root/'.gitignore'
-    entries = ['.claude/session_state.json', '.claude/session_spend.tmp', '.claude/git_cache.json', '.claude/checkpoints/']
-    existing = gitignore.read_text(encoding='utf-8').splitlines() if gitignore.exists() else []
-    with gitignore.open('a', encoding='utf-8') as f:
-        for e in entries:
-            if e not in existing:
-                f.write(e + '\n')
+    _write_gitignore(root)
 
     print(f'CovenantWin installed in {root} ({basket}). Git hooksPath is .githooks.')
     print(f'  Dev guide:    {dev_guide_dst_name}')
@@ -853,17 +889,31 @@ def upgrade(args):
     print('Integrity manifest re-pinned (.claude/covenant_integrity.sha256).')
     _write_gitattributes(root)
     print('Governance files pinned to LF in .gitattributes (backfilled for existing installs).')
+    _write_gitignore(root)
 
     sp = root/STATE_REL
     state = load(sp, state_default())
     old_version = state.get('framework_version', '0.0.0-win')
     state['framework_version'] = '1.0.0-win'
     state['framework_last_upgrade'] = dt.datetime.now(dt.timezone.utc).isoformat()
+    # Migrate any receipts written by a pre-split version of this engine out
+    # of STATE_REL (committed) into RECEIPTS_REL (gitignored) — see
+    # RECEIPTS_REL's comment for why they can't stay here. Without this, an
+    # existing install's old receipts would just sit orphaned in STATE_REL
+    # forever: nothing reads state['receipts'] anymore, but atomic_json below
+    # would keep writing it back unchanged on every future upgrade too.
+    old_receipts = state.pop('receipts', None)
+    if old_receipts:
+        rp = root/RECEIPTS_REL
+        receipts = load(rp, receipts_default())
+        receipts.setdefault('receipts', {}).update(old_receipts)
+        atomic_json(rp, receipts)
     atomic_json(sp, state)
 
     print('')
     print(f'CovenantWin upgrade complete: framework_version {old_version} -> {state["framework_version"]}')
-    print('Preserved: .claude/baseline.json, CLAUDE.md, covenant_state.json receipts/token/thresholds/core_files.')
+    print('Preserved: .claude/baseline.json, CLAUDE.md, covenant_state.json token/thresholds/core_files, '
+          'covenant_receipts.json.')
     print('This upgrade re-pinned .claude/covenant_integrity.sha256 - CI will fail until the new manifest')
     print('is committed alongside every file it covers. Get this reviewed like any other change to the')
     print('enforcement boundary, not rubber-stamped.')

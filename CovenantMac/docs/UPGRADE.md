@@ -61,7 +61,7 @@ The script detects `--upgrade`, skips basket selection, and runs a targeted re-c
 | `.claude/baseline.json` | Debt ratchet — encodes your team's accepted technical debt; overwriting it would grandfather nothing and block everything |
 | `CLAUDE.md` | Repo constitution — team-authored, repo-specific; a framework upgrade never edits this directly (see `/reconcile-governance` above for the propose-and-approve path when the constitution's source content changed) |
 | `.mcp.json` | Graph server config — tied to the specific binary path pipx installed; regenerating it would break graph mode |
-| `covenant_state.json — receipts` | Fingerprint cache — losing receipts forces every developer's next push to re-run the full test suite |
+| `.claude/covenant_receipts.json` | Fingerprint cache (gitignored, per-machine) — losing receipts just forces the next push on that machine to re-run the full test suite once; migrated here automatically if found in the old `covenant_state.json` location |
 | `covenant_state.json — token.*` | Budget accounting — clearing it would reset daily spend tracking mid-day |
 | `covenant_state.json — thresholds` | Human-tuned — your team may have raised coverage_pct or tightened complexity_max; upgrades don't reset those |
 | `covenant_state.json — core_files` | Architecture-critical file list — team-authored; a framework upgrade cannot know which files your team considers critical |

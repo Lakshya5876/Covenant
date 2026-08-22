@@ -69,9 +69,54 @@ class CovenantWinIntegrationTests(unittest.TestCase):
         call(['git','add','good.txt'],self.repo)
         p=call(['git','commit','-m','clean change'],self.repo)
         self.assertEqual(p.returncode,0,p.stderr)
-        state=json.loads((self.repo/'.claude/covenant_state.json').read_text())
-        self.assertTrue(state['receipts'])
+        receipts=json.loads((self.repo/'.claude/covenant_receipts.json').read_text())
+        self.assertTrue(receipts['receipts'])
         self.assertTrue((self.repo/'.githooks/covenantwin.py').is_file())
+
+    def test_receipt_lives_in_a_separate_gitignored_file_not_covenant_state(self):
+        # Regression: receipts used to live inside covenant_state.json itself,
+        # which is a real, confirmed bug -- a receipt is keyed by the tree
+        # hash of the commit it describes, and covenant_state.json is part of
+        # that same tree, so writing the receipt into it changes its own hash
+        # out from under itself (a circular dependency, not a style choice).
+        (self.repo/'good.txt').write_text('safe content')
+        call(['git','add','good.txt'],self.repo)
+        p=call(['git','commit','-m','clean change'],self.repo)
+        self.assertEqual(p.returncode,0,p.stderr)
+        state=json.loads((self.repo/'.claude/covenant_state.json').read_text())
+        self.assertNotIn('receipts', state)
+        gitignore=(self.repo/'.gitignore').read_text()
+        self.assertIn('.claude/covenant_receipts.json', gitignore)
+
+    def test_covenant_state_is_not_left_dirty_after_a_clean_commit(self):
+        # The actual bug this whole split exists to fix: covenant_state.json
+        # used to be left permanently modified-but-unstaged after every
+        # commit (the ledger write happens after git snapshots the index),
+        # which could even block an ordinary `git checkout` to another
+        # branch. It must come back clean after a normal commit now.
+        (self.repo/'good.txt').write_text('safe content')
+        call(['git','add','good.txt'],self.repo)
+        p=call(['git','commit','-m','clean change'],self.repo)
+        self.assertEqual(p.returncode,0,p.stderr)
+        status=call(['git','status','--porcelain','.claude/covenant_state.json'],self.repo)
+        self.assertEqual(status.stdout.strip(),'',
+                          f'covenant_state.json should be clean after commit, got: {status.stdout!r}')
+
+    def test_receipt_fingerprint_matches_the_actual_committed_tree(self):
+        # The subtler bug the naive fix would have introduced: if the
+        # receipt is keyed by a tree hash computed BEFORE covenant_state.json
+        # gets re-staged with its ledger update, the receipt silently never
+        # matches what pre-push later computes from the real HEAD^{tree} --
+        # defeating the fast path on every single commit. Verify the receipt
+        # key equals the real, final committed tree.
+        (self.repo/'good.txt').write_text('safe content')
+        call(['git','add','good.txt'],self.repo)
+        p=call(['git','commit','-m','clean change'],self.repo)
+        self.assertEqual(p.returncode,0,p.stderr)
+        real_tree=call(['git','rev-parse','HEAD^{tree}'],self.repo).stdout.strip()
+        receipts=json.loads((self.repo/'.claude/covenant_receipts.json').read_text())
+        self.assertIn(real_tree, receipts['receipts'])
+        self.assertEqual(receipts['receipts'][real_tree]['outcome'], 'pass')
 
     def test_install_refuses_the_covenantwin_repo_itself(self):
         # CovenantWin/ itself has no .git of its own inside the Covenant monorepo (only
@@ -290,6 +335,30 @@ class CovenantWinIntegrationTests(unittest.TestCase):
         # integrity manifest must be re-pinned and internally consistent after upgrade
         check = call([sys.executable, str(ENGINE), 'check-integrity', str(self.repo)], self.repo)
         self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_upgrade_migrates_pre_split_receipts_out_of_covenant_state_json(self):
+        # Simulates an install from before the receipts split: an old
+        # covenant_state.json with receipts written inline. --upgrade must
+        # move them into covenant_receipts.json (merging with, not clobbering,
+        # anything already there) rather than leave them orphaned forever in
+        # a field nothing reads anymore.
+        state_path = self.repo/'.claude/covenant_state.json'
+        state = json.loads(state_path.read_text())
+        state['receipts'] = {'old-tree-abc': {'timestamp': '2020-01-01T00:00:00Z', 'branch': 'main', 'outcome': 'pass'}}
+        state_path.write_text(json.dumps(state, indent=2))
+
+        receipts_path = self.repo/'.claude/covenant_receipts.json'
+        receipts_path.write_text(json.dumps({'receipts': {'newer-tree-xyz': {'outcome': 'pass'}}}, indent=2))
+
+        p = call([sys.executable, str(ENGINE), 'upgrade', str(self.repo)], self.repo)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+        new_state = json.loads(state_path.read_text())
+        self.assertNotIn('receipts', new_state)
+        merged = json.loads(receipts_path.read_text())['receipts']
+        self.assertIn('old-tree-abc', merged)
+        self.assertIn('newer-tree-xyz', merged)
+        self.assertEqual(merged['old-tree-abc']['outcome'], 'pass')
 
     def test_upgrade_backfills_gitattributes_for_a_pre_existing_install(self):
         # Simulates an install from before .gitattributes existed as a

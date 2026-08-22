@@ -11,7 +11,8 @@ This document describes what the framework touches, what it never reads, and how
 | Source | Read by | Purpose |
 |--------|---------|---------|
 | Staged file contents | `covenant.sh` (via `git diff --cached`) | Lint, type-check, complexity, layer-boundary scan |
-| `.claude/covenant_state.json` | `covenant.sh`, `install.sh` | Token budget, coverage thresholds, receipts, core_files |
+| `.claude/covenant_state.json` | `covenant.sh`, `install.sh` | Token budget, coverage thresholds, core_files |
+| `.claude/covenant_receipts.json` (gitignored, never committed) | `covenant.sh` | Fingerprint receipts — the pre-push fast-path cache |
 | `.claude/baseline.json` | `covenant.sh` | Identity-based lint debt ratchet |
 | `refs/notes/bypasses` | `pre-push` hook | Bypass clock enforcement |
 | `~/.claude/org_policy.json` | `covenant.sh` | Per-developer token budget ceiling (local file, not centrally enforced — see §6, CC6.6) |
@@ -104,7 +105,7 @@ Every covenant bypass is cryptographically linked to the git history.
 |------|----------|-----------|
 | Token audit log | `covenant_state.json — token.token_audit_log[]` | Rolling 90-day window; covenant.sh prunes entries older than 90 days on each write |
 | Per-session spend | `.claude/session_spend.tmp` | Deleted by covenant.sh at the end of every covenant run (gitignored) |
-| Fingerprint receipts | `covenant_state.json — receipts{}` | Retained indefinitely (small, ~100 bytes/receipt); no PII |
+| Fingerprint receipts | `.claude/covenant_receipts.json` (gitignored) | Pruned to the 50 most recent on write; no PII |
 | Bypass notes | `refs/notes/bypasses` | Permanent git history; never auto-purged (audit requirement) |
 | Git metadata cache | `.claude/git_cache.json` | TTL 60 s; covenant.sh invalidates stale entries on every run (gitignored) |
 
